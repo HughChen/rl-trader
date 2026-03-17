@@ -33,3 +33,39 @@ data/
     ├── val/
     └── test/
 ```
+
+## Environment (Phase 2)
+
+Gymnasium-compatible portfolio allocation environment:
+
+```python
+from src.data.split import load_splits
+from src.env.portfolio_env import PortfolioEnv
+
+train, val, test = load_splits("data/processed")
+env = PortfolioEnv(train, history_window=50, fee_rate=0.001, slippage_sigma=0.1)
+obs, info = env.reset()
+obs, reward, done, truncated, info = env.step(env.action_space.sample())
+```
+
+Test the environment:
+```bash
+python scripts/test_env.py
+```
+
+## Training & Evaluation (Phase 3–4)
+
+**Baseline** (equal-weight buy-and-hold):
+```bash
+python scripts/run_baseline.py --split test
+```
+
+**Train PPO agent**:
+```bash
+python scripts/train_agent.py --split train --total-timesteps 100000 --episode-length 252
+```
+
+**Evaluate** (agent vs baseline):
+```bash
+python scripts/evaluate.py --split test --model models/ppo_portfolio.zip
+```

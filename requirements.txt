@@ -7,6 +7,6 @@ pyarrow>=14.0.0
 # Technical indicators
 ta>=0.11.0
 
-# RL (for later phases)
-# gymnasium>=0.29.0
-# stable-baselines3>=2.0.0
+# RL
+gymnasium>=0.29.0
+stable-baselines3>=2.0.0

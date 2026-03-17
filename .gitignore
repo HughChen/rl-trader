@@ -1,6 +1,9 @@
 # Data (root-level only; src/data/ is code)
 /data/
 
+# Trained models
+models/
+
 # Python
 __pycache__/
 *.py[cod]

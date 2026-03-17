@@ -1,0 +1,69 @@
+"""Run agents through the environment and collect results."""
+
+import numpy as np
+
+from .metrics import compute_metrics, equity_curve
+
+
+def run_episode(env, get_action, seed: int | None = None) -> tuple[np.ndarray, float, dict]:
+    """
+    Run one episode, collecting rewards.
+
+    Args:
+        env: PortfolioEnv instance
+        get_action: callable(obs, info) -> action array
+        seed: Optional random seed for env.reset
+
+    Returns:
+        (rewards, final_value, info_dict)
+    """
+    obs, info = env.reset(seed=seed)
+    rewards = []
+    done = False
+    while not done:
+        action = get_action(obs, info)
+        obs, reward, done, truncated, info = env.step(action)
+        rewards.append(reward)
+        done = done or truncated
+
+    rewards = np.array(rewards)
+    return rewards, info.get("portfolio_value", np.exp(np.sum(rewards))), info
+
+
+def run_equal_weight(env, seed: int | None = None) -> tuple[np.ndarray, float, dict]:
+    """Run equal-weight buy-and-hold baseline."""
+    n_assets = env.n_assets
+    action = np.full(n_assets, 1.0 / n_assets, dtype=np.float32)
+
+    def get_action(obs, info):
+        return action
+
+    return run_episode(env, get_action, seed)
+
+
+def run_episodes(
+    env,
+    get_action,
+    n_episodes: int = 10,
+    seed: int | None = None,
+) -> tuple[list[np.ndarray], list[float], dict]:
+    """
+    Run multiple episodes (for env with episode_length set).
+
+    Returns:
+        (list of reward arrays, list of final values, aggregate metrics)
+    """
+    rng = np.random.default_rng(seed)
+    all_rewards = []
+    all_final_values = []
+
+    for i in range(n_episodes):
+        rewards, final_val, _ = run_episode(env, get_action, seed=int(rng.integers(0, 2**31)))
+        all_rewards.append(rewards)
+        all_final_values.append(final_val)
+
+    # Aggregate: concatenate all rewards for overall metrics
+    concat_rewards = np.concatenate(all_rewards)
+    metrics = compute_metrics(concat_rewards)
+
+    return all_rewards, all_final_values, metrics

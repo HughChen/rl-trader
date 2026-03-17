@@ -161,21 +161,136 @@ RL is data-hungry. Strategies:
 - [ ] Train/validation/test split by date
 
 ### Phase 2: Environment
-- [ ] Gymnasium-compatible trading environment
-- [ ] Observation space: price tensor + indicators + portfolio state
-- [ ] Action space: portfolio weights (continuous or discrete)
-- [ ] Reward: log-return with transaction cost penalty
-- [ ] Fee model (configurable maker/taker)
-- [ ] Slippage model (square-root market impact using volume)
+- [x] Gymnasium-compatible trading environment
+- [x] Observation space: price tensor + indicators + portfolio state
+- [x] Action space: portfolio weights (continuous)
+- [x] Reward: log-return with transaction cost penalty
+- [x] Fee model (configurable maker/taker)
+- [x] Slippage model (square-root market impact using volume)
+
+---
+
+## 12. Phase 2: Environment — Implementation Plan
+
+### 12.1 Overview
+
+Build `src/env/` — a Gymnasium environment that steps through aligned market data, accepts portfolio weight actions, and returns observations + rewards with fees and slippage.
+
+### 12.2 Data Loading & Alignment
+
+| Task | Details |
+|------|---------|
+| **Input** | `load_splits()` returns train/val/test dicts of symbol → DataFrame |
+| **Alignment** | Intersect timestamps across all symbols; drop rows with any NaN in required columns |
+| **Warmup** | Indicators have warmup (e.g. RSI needs 14 bars). Start env step index after warmup, or forward-fill/drop early rows |
+| **Output** | Single aligned DataFrame with MultiIndex (timestamp, symbol) or dict of aligned arrays indexed by step |
+
+**Structure**: Create `AlignedMarketData` helper that:
+- Takes `dict[str, DataFrame]`, aligns on common timestamps
+- Exposes `prices[t, i]`, `volumes[t, i]`, `indicators[t, i, :]` by step index
+- Handles warmup by trimming first N rows
+
+### 12.3 Observation Space
+
+**Components** (flattened into a 1D vector for Gymnasium `Box`):
+
+| Component | Shape | Description |
+|-----------|-------|--------------|
+| **Price tensor** | `(history_window × n_assets)` | Last `history_window` steps of normalized close returns: `r_t = close_t / close_{t-1} - 1` (or log return). Per-asset, last H values. |
+| **Indicators** | `(n_assets × n_indicators)` | RSI, MACD, MACD_signal, MACD_diff, BB position, ATR (normalized), rel_volume. One value per asset per indicator. |
+| **Portfolio state** | `(n_assets,)` | Previous weights w_{t-1} |
+
+**Total dim**: `history_window * n_assets + n_assets * n_indicators + n_assets`
+
+**Normalization**: Clip/mask NaNs; normalize indicators to [0,1] or z-score using rolling stats (optional for v1).
+
+**Config**: `history_window` (e.g. 50), `indicator_cols` (subset of available).
+
+### 12.4 Action Space
+
+- **Type**: `Box(low=0, high=1, shape=(n_assets,))`
+- **Constraint**: Weights must sum to 1. Two options:
+  1. **Env normalizes**: Clip to [0,1], divide by sum. Agent can output raw logits.
+  2. **Policy uses softmax**: Agent outputs logits; softmax gives valid weights. Env receives already-normalized weights.
+- **Recommendation**: Env normalizes — more robust to policy errors.
+
+### 12.5 Step Logic (Pseudocode)
+
+```
+def step(action):
+    w_target = normalize(action)  # ensure sum=1, in [0,1]
+    w_prev = self.w
+    prices_now = self.prices[t]
+    prices_prev = self.prices[t-1]
+    volumes_now = self.volumes[t]
+
+    # Portfolio value before rebalancing (price move)
+    p_before = sum(w_prev[i] * (prices_now[i] / prices_prev[i]) for i in assets)
+    p_prev = 1.0  # or track actual
+
+    # Transaction cost: fee + slippage
+    fee_cost = fee_rate * sum(|w_target[i] - w_prev[i]|)
+    slippage_cost = sum(slippage_i for each asset i)
+    # slippage_i = sigma * sqrt(trade_value_i / daily_volume_i)
+
+    cost_factor = 1 - fee_cost - slippage_cost
+    p_after = p_before * cost_factor
+
+    reward = log(p_after / p_prev)
+    self.w = w_target
+    self.portfolio_value *= (p_after / p_prev)
+    t += 1
+    obs = build_observation(t)
+    done = t >= T
+    return obs, reward, done, truncated, info
+```
+
+### 12.6 Fee Model
+
+- **Config**: `fee_rate: float` (e.g. 0.001 for 0.1%)
+- **Formula**: `cost = fee_rate * sum_i |w_target[i] - w_prev[i]|` (fraction of portfolio traded)
+- **Note**: Applied once per rebalance; symmetric for buys/sells.
+
+### 12.7 Slippage Model (Square-Root)
+
+- **Config**: `slippage_sigma: float` (e.g. 0.1)
+- **Per asset i**: `trade_value_i = |Δw_i| * portfolio_value`
+- **Slippage cost (fraction)**: `sigma * sqrt(trade_value_i / (volume_i * price_i))` — volume in quote currency
+- **Total**: Sum over assets. Cap at some max to avoid extreme values.
+
+**Simpler variant**: `slippage = sigma * sqrt(sum(|Δw_i|))` — no volume, just trade size.
+
+### 12.8 Episode Structure
+
+- **Option A**: One episode = full dataset (train/val/test). `reset()` starts at step 0; `done` when reaching end.
+- **Option B**: Random sub-episodes for training (sample random start, fixed length). Better for RL sample diversity.
+- **Recommendation**: Support both. Param `episode_length=None` for full, or `episode_length=252` for random windows.
+
+### 12.9 File Structure
+
+```
+src/env/
+├── __init__.py
+├── aligned_data.py    # AlignedMarketData: load, align, index by step
+├── cost_models.py    # fee_cost(), slippage_cost()
+└── portfolio_env.py  # PortfolioEnv(gymnasium.Env)
+```
+
+### 12.10 Implementation Order
+
+1. **aligned_data.py** — Load splits, align timestamps, build step-indexed arrays. Unit test on small data.
+2. **cost_models.py** — Fee and slippage functions. Unit test with known inputs.
+3. **portfolio_env.py** — Env class. `reset()` loads data, sets t=0, returns obs. `step()` implements logic above. Test with random agent.
+4. **Integration** — Run a few episodes with equal-weight baseline, verify reward sign and magnitude.
 
 ### Phase 3: Agent Training
-- [ ] Baseline: Equal-weight, buy-and-hold
-- [ ] RL agent (e.g., PPO, A2C, or PGPortfolio-style policy gradient)
+- [x] Baseline: Equal-weight, buy-and-hold
+- [x] RL agent (PPO via Stable-Baselines3)
 - [ ] Hyperparameter tuning on validation set
 
 ### Phase 4: Evaluation
-- [ ] Sharpe ratio, Sortino ratio, max drawdown
-- [ ] Comparison vs. BTC benchmark, equal-weight portfolio
+- [x] Sharpe ratio, Sortino ratio, max drawdown
+- [x] Comparison vs. equal-weight portfolio
 - [ ] Sensitivity analysis: fee levels, slippage coefficient, bar frequency
 - [ ] Ablation: with/without technical indicators, with/without cost penalty
 
