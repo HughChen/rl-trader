@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 import gymnasium as gym
@@ -12,9 +13,14 @@ from .aligned_data import INDICATOR_COLS, align_data
 from .cost_models import fee_cost, slippage_cost
 
 
-def _normalize_weights(x: np.ndarray) -> np.ndarray:
-    """Clip to [0, 1] and normalize to sum to 1."""
+def _normalize_weights(
+    x: np.ndarray,
+    max_weight_per_asset: float | None = None,
+) -> np.ndarray:
+    """Clip to [0, 1] (or [0, max_weight_per_asset]) and normalize to sum to 1."""
     x = np.clip(x, 0, 1).astype(np.float64)
+    if max_weight_per_asset is not None and max_weight_per_asset < 1.0:
+        x = np.clip(x, 0, max_weight_per_asset)
     s = np.sum(x)
     if s < 1e-12:
         return np.ones_like(x) / len(x)
@@ -39,11 +45,15 @@ class PortfolioEnv(gym.Env):
         history_window: int = 50,
         fee_rate: float = 0.001,
         slippage_sigma: float = 0.1,
+        notional_usd: float = 1e6,
         episode_length: int | None = None,
         warmup: int = 26,
         seed: int | None = None,
         reward_scale: float = 100.0,
         turnover_penalty: float = 0.0,
+        max_weight_per_asset: float | None = 0.35,
+        reward_type: str = "log_return",
+        sharpe_window: int = 20,
     ):
         """
         Args:
@@ -51,17 +61,22 @@ class PortfolioEnv(gym.Env):
             history_window: number of past return steps per asset
             fee_rate: transaction fee (e.g. 0.001 = 0.1%)
             slippage_sigma: market impact coefficient
+            notional_usd: reference portfolio size (USD) for slippage scaling
             episode_length: if set, random sub-episodes; if None, full dataset
             warmup: rows to drop for indicator warmup
             seed: random seed
             reward_scale: scale factor for reward (stronger learning signal)
             turnover_penalty: extra penalty per unit turnover (discourages churning)
+            max_weight_per_asset: cap per-asset weight (e.g. 0.35); None = no cap
+            reward_type: "log_return" or "sharpe" (rolling Sharpe-like reward)
+            sharpe_window: window size for rolling Sharpe when reward_type="sharpe"
         """
         super().__init__()
         self._aligned = align_data(data, warmup=warmup)
         self.history_window = history_window
         self.fee_rate = fee_rate
         self.slippage_sigma = slippage_sigma
+        self.notional_usd = notional_usd
         self.episode_length = episode_length
         self.warmup = warmup
 
@@ -89,7 +104,11 @@ class PortfolioEnv(gym.Env):
 
         self.reward_scale = reward_scale
         self.turnover_penalty = turnover_penalty
+        self.max_weight_per_asset = max_weight_per_asset
+        self.reward_type = reward_type
+        self.sharpe_window = sharpe_window
         self._rng = np.random.default_rng(seed)
+        self._reward_buffer: deque[float] = deque(maxlen=sharpe_window)
         self._t: int = 0
         self._start_t: int = 0
         self._w: np.ndarray = np.zeros(n_assets)
@@ -144,6 +163,7 @@ class PortfolioEnv(gym.Env):
         n = self._aligned.n_assets
         self._w = np.ones(n) / n
         self._portfolio_value = 1.0
+        self._reward_buffer.clear()
 
         obs = self._build_obs(self._t)
         info = {
@@ -157,7 +177,10 @@ class PortfolioEnv(gym.Env):
         self,
         action: np.ndarray,
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
-        w_target = _normalize_weights(np.asarray(action, dtype=np.float64))
+        w_target = _normalize_weights(
+            np.asarray(action, dtype=np.float64),
+            max_weight_per_asset=self.max_weight_per_asset,
+        )
         t = self._t
         T = self._aligned.n_steps
 
@@ -183,13 +206,26 @@ class PortfolioEnv(gym.Env):
             prices_now,
             volumes_now,
             self.slippage_sigma,
+            notional_usd=self.notional_usd,
         )
         cost_factor = 1.0 - fee - slippage
         p_after = p_before * cost_factor
 
         raw_reward = np.log(p_after / p_prev)
         turnover = np.sum(np.abs(w_target - self._w))
-        reward = (raw_reward - self.turnover_penalty * turnover) * self.reward_scale
+
+        if self.reward_type == "sharpe":
+            self._reward_buffer.append(raw_reward)
+            if len(self._reward_buffer) >= 2:
+                arr = np.array(self._reward_buffer)
+                mean_r = np.mean(arr)
+                std_r = np.std(arr) + 1e-8
+                sharpe_like = mean_r / std_r
+            else:
+                sharpe_like = raw_reward
+            reward = (sharpe_like - self.turnover_penalty * turnover) * self.reward_scale
+        else:
+            reward = (raw_reward - self.turnover_penalty * turnover) * self.reward_scale
         self._portfolio_value = p_after
         self._w = w_target
         self._t = t + 1

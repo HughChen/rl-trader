@@ -9,6 +9,10 @@ Each experiment has a separate report with **setup** and **findings**.
 | [exp_003_turnover_penalty](exp_003_turnover_penalty.md) | Effect of turnover penalty on validation |
 | [exp_004_hyperparam_tuning](exp_004_hyperparam_tuning.md) | Grid search on validation set |
 | [exp_005_exchange_restrictions](exp_005_exchange_restrictions.md) | CCXT exchange data limits |
+| [exp_006_improvements](exp_006_improvements.md) | Action constraints, shorter episodes, walk-forward, Sharpe reward |
+| [exp_007_cost_attribution](exp_007_cost_attribution.md) | Fee vs slippage impact on agent performance |
+| [exp_008_slippage_notional](exp_008_slippage_notional.md) | Slippage notional fix (trade size vs volume) |
+| [exp_009_turnover_notional_sweep](exp_009_turnover_notional_sweep.md) | Turnover penalty & notional sweep |
 
 ---
 

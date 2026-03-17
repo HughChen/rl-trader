@@ -32,24 +32,27 @@ def slippage_cost(
     prices: np.ndarray,
     volumes: np.ndarray,
     sigma: float,
+    *,
+    notional_usd: float = 1e6,
     min_volume: float = 1e-8,
 ) -> float:
     """
     Square-root market impact slippage (Almgren-Chriss style).
 
-    Per asset i: impact_i = sigma * sqrt(trade_value_i / volume_quote_i)
-    trade_value_i = |Δw_i| * portfolio_value
-    volume_quote_i = volumes[i] * prices[i] (quote currency)
+    Per asset i: impact_i = sigma * sqrt(trade_value_usd_i / volume_quote_i)
+    trade_value_usd_i = |Δw_i| * portfolio_value * notional_usd
+    volume_quote_i = volumes[i] * prices[i] (quote currency, USD)
 
     Total cost = sum over assets of (impact_i * |Δw_i|) as fraction of portfolio.
 
     Args:
         w_prev: Previous weights
         w_target: Target weights
-        portfolio_value: Current portfolio value
+        portfolio_value: Portfolio value (growth factor, typically 0.5–2.0)
         prices: Asset prices (n_assets,)
         volumes: Volume in base currency (n_assets,) — we use volume*price for quote
         sigma: Impact coefficient
+        notional_usd: Reference portfolio size in USD for slippage scaling (default 1e6)
         min_volume: Floor to avoid div by zero
 
     Returns:
@@ -60,10 +63,10 @@ def slippage_cost(
     if turnover < 1e-12:
         return 0.0
 
-    trade_values = dw * portfolio_value
+    trade_values_usd = dw * portfolio_value * notional_usd
     volume_quote = np.maximum(volumes * prices, min_volume)
 
-    impact = sigma * np.sqrt(trade_values / volume_quote)
+    impact = sigma * np.sqrt(trade_values_usd / volume_quote)
     impact = np.minimum(impact, 0.1)  # Cap per-asset impact at 10%
     total_cost = np.sum(impact * dw) / turnover
     return min(total_cost, 0.5)  # Cap total slippage at 50%

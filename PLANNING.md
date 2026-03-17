@@ -392,10 +392,10 @@ Or rolling Sharpe over last N steps.
 
 ### 13.6 Implementation Priority
 
-1. **Action constraints** — Quick win, prevents blow-ups
-2. **Walk-forward evaluation** — Better assessment of robustness
-3. **Risk-adjusted reward** — May improve strategy quality
-4. **Shorter episodes** — Easy to test
+1. **Action constraints** — ✅ Implemented (`max_weight_per_asset=0.35`)
+2. **Walk-forward evaluation** — ✅ Implemented (`scripts/walk_forward_eval.py`)
+3. **Risk-adjusted reward** — ✅ Implemented (optional `--reward-type sharpe`)
+4. **Shorter episodes** — ✅ Default changed to 100 steps
 5. **Regime-aware training** — More involved, do last
 
 ---

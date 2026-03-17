@@ -50,6 +50,23 @@ def save_splits(
             df.to_parquet(split_dir / f"{safe_name}.parquet", index=True)
 
 
+def load_full_data(
+    data_dir: Path | str,
+    symbols: list[str] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Load and merge train/val/test into full per-symbol DataFrames.
+    Used for walk-forward evaluation with custom date splits.
+    """
+    train, val, test = load_splits(data_dir, symbols=symbols)
+    full = {}
+    for symbol in set(train) | set(val) | set(test):
+        dfs = [d[symbol] for d in (train, val, test) if symbol in d and len(d[symbol]) > 0]
+        if dfs:
+            full[symbol] = pd.concat(dfs).sort_index().drop_duplicates()
+    return full
+
+
 def load_splits(
     data_dir: Path | str,
     symbols: list[str] | None = None,

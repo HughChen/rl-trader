@@ -26,6 +26,7 @@ def evaluate_on_val(model, val_data, n_episodes: int = 10, seed: int = 42) -> fl
         fee_rate=0.001,
         slippage_sigma=0.05,
         episode_length=252,
+        max_weight_per_asset=0.35,
         seed=seed,
     )
 
@@ -88,6 +89,7 @@ def main():
                 episode_length=252,
                 reward_scale=reward_scale,
                 turnover_penalty=turnover_penalty,
+                max_weight_per_asset=0.35,
                 seed=None,
             )
 
@@ -122,6 +124,7 @@ def main():
                 episode_length=252,
                 reward_scale=reward_scale,
                 turnover_penalty=turnover_penalty,
+                max_weight_per_asset=0.35,
                 seed=None,
             )
 

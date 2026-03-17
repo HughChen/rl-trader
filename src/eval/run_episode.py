@@ -5,7 +5,13 @@ import numpy as np
 from .metrics import compute_metrics, equity_curve
 
 
-def run_episode(env, get_action, seed: int | None = None) -> tuple[np.ndarray, float, dict]:
+def run_episode(
+    env,
+    get_action,
+    seed: int | None = None,
+    *,
+    return_actions: bool = False,
+) -> tuple[np.ndarray, float, dict] | tuple[np.ndarray, float, dict, list[np.ndarray], int]:
     """
     Run one episode, collecting rewards.
 
@@ -13,22 +19,31 @@ def run_episode(env, get_action, seed: int | None = None) -> tuple[np.ndarray, f
         env: PortfolioEnv instance
         get_action: callable(obs, info) -> action array
         seed: Optional random seed for env.reset
+        return_actions: If True, also return (actions, start_t) for cost replay
 
     Returns:
-        (rewards, final_value, info_dict)
+        (rewards, final_value, info_dict) or
+        (rewards, final_value, info_dict, actions, start_t) if return_actions
     """
     obs, info = env.reset(seed=seed)
+    start_t = info.get("t", 0)
     rewards = []
+    actions_list = [] if return_actions else None
     done = False
     while not done:
         action = get_action(obs, info)
+        if return_actions:
+            actions_list.append(np.asarray(action, dtype=np.float64))
         obs, reward, done, truncated, info = env.step(action)
         # Use raw_reward for metrics when available (unscaled log return)
         rewards.append(info.get("raw_reward", reward))
         done = done or truncated
 
     rewards = np.array(rewards)
-    return rewards, info.get("portfolio_value", np.exp(np.sum(rewards))), info
+    result = (rewards, info.get("portfolio_value", np.exp(np.sum(rewards))), info)
+    if return_actions:
+        return (*result, actions_list, start_t)
+    return result
 
 
 def run_equal_weight(env, seed: int | None = None) -> tuple[np.ndarray, float, dict]:

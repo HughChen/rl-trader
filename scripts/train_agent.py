@@ -18,13 +18,17 @@ def main():
     parser = argparse.ArgumentParser(description="Train PPO agent")
     parser.add_argument("--data-dir", type=Path, default=Path("data/processed"))
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
-    parser.add_argument("--episode-length", type=int, default=252, help="Steps per episode")
+    parser.add_argument("--episode-length", type=int, default=100, help="Steps per episode (shorter = more episodes)")
     parser.add_argument("--n-envs", type=int, default=4, help="Parallel envs for vec env")
     parser.add_argument("--total-timesteps", type=int, default=200_000)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--reward-scale", type=float, default=10.0)
     parser.add_argument("--slippage-sigma", type=float, default=0.05)
-    parser.add_argument("--turnover-penalty", type=float, default=0.01)
+    parser.add_argument("--notional", type=float, default=1e6, help="Portfolio size (USD) for slippage scaling")
+    parser.add_argument("--turnover-penalty", type=float, default=0.05)
+    parser.add_argument("--max-weight", type=float, default=0.35, help="Max weight per asset (concentration limit)")
+    parser.add_argument("--reward-type", choices=["log_return", "sharpe"], default="log_return")
+    parser.add_argument("--sharpe-window", type=int, default=20, help="Rolling window for Sharpe reward")
     parser.add_argument("--out", type=Path, default=Path("models/ppo_portfolio"))
     parser.add_argument("--save-vec-normalize", type=Path, default=Path("models/vec_normalize.pkl"))
     parser.add_argument("--seed", type=int, default=42)
@@ -42,9 +46,13 @@ def main():
             history_window=50,
             fee_rate=0.001,
             slippage_sigma=args.slippage_sigma,
+            notional_usd=args.notional,
             episode_length=args.episode_length,
             reward_scale=args.reward_scale,
             turnover_penalty=args.turnover_penalty,
+            max_weight_per_asset=args.max_weight,
+            reward_type=args.reward_type,
+            sharpe_window=args.sharpe_window,
             seed=None,
         )
 
