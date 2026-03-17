@@ -1,0 +1,12 @@
+# Data
+ccxt>=4.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# Technical indicators
+ta>=0.11.0
+
+# RL (for later phases)
+# gymnasium>=0.29.0
+# stable-baselines3>=2.0.0
