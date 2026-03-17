@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import TRAIN_END, VAL_END
+from .config import SYMBOLS, TRAIN_END, VAL_END
 
 
 def split_by_date(
@@ -54,14 +54,13 @@ def load_splits(
     data_dir: Path | str,
     symbols: list[str] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
-    """Load train/val/test splits from disk."""
+    """Load train/val/test splits from disk. Uses config SYMBOLS by default."""
     data_dir = Path(data_dir)
     train_dir = data_dir / "train"
-    symbols = symbols or (
-        [p.stem.replace("_", "/") for p in train_dir.glob("*.parquet")]
-        if train_dir.exists()
-        else []
-    )
+    symbols = symbols or SYMBOLS
+    # Fallback: discover from disk if config symbols not found
+    if not symbols and train_dir.exists():
+        symbols = [p.stem.replace("_", "/") for p in train_dir.glob("*.parquet")]
 
     def load_split(name: str) -> dict[str, pd.DataFrame]:
         result = {}

@@ -2,6 +2,8 @@
 
 > Offline backtesting and methodology evaluation for PGPortfolio-style reinforcement learning trading strategies.
 
+**See also**: [experiments/](experiments/) for setup details and findings.
+
 ---
 
 ## 1. Project Overview
@@ -79,10 +81,21 @@ We want realistic execution costs beyond fixed fees. Options (from simple to com
 
 ## 4. Data Acquisition Strategy
 
-### Phase 1: Easy Path (Start Here)
+### 4.1 Exchange Restrictions (CCXT)
+
+| Exchange | History limit | Notes |
+|----------|---------------|-------|
+| **KuCoin** | ~2 years (1h bars) | ✅ Recommended. Paginates correctly, no geo-restriction. |
+| **Kraken** | ~720 candles max | ❌ Ignores `since` beyond limit. 1h bars ≈ 1 month only. |
+| **Binance** | Years | ⚠️ Geo-restricted (451) in US and some regions. |
+| **Bybit** | Varies | Untested; may work similarly to KuCoin. |
+
+**Recommendation**: Use KuCoin (`--exchange kucoin`) for 2+ years of data. Kraken is unsuitable for RL (too little history). Binance works only if not geo-restricted.
+
+### 4.2 Phase 1: Easy Path (Start Here)
 
 - **Fetcher**: CCXT — pull 1h OHLCV for top 10 liquid coins (BTC, ETH, SOL, etc.)
-- **History**: 2+ years for sufficient RL training samples
+- **History**: 2+ years for sufficient RL training samples (use KuCoin)
 - **Feature engineering**: ta library for ATR, RSI, MACD
 - **Cost**: Free / low cost
 
@@ -309,6 +322,81 @@ src/env/
 
 - [ ] Upgrade to order book–based slippage if volume model is too coarse?
 - [ ] Add perpetual futures support later (funding rates) if shorting/leverage desired?
+
+---
+
+## 13. Improvement Plans
+
+Planned modifications to improve agent robustness and evaluation rigor.
+
+### 13.1 Walk-Forward Testing
+
+**Current**: Single train (2024) → val (early 2025) → test (mid 2025–2026).
+
+**Plan**: Rolling windows to test across multiple regimes:
+
+| Window | Train | Test |
+|--------|-------|------|
+| 1 | 2024-Q1–Q2 | 2024-Q3 |
+| 2 | 2024-Q1–Q3 | 2024-Q4 |
+| 3 | 2024-Q2–Q4 | 2025-Q1 |
+| … | … | … |
+
+**Implementation**: `scripts/walk_forward_eval.py` — define overlapping windows, train (or load) per window, evaluate on out-of-sample period, report mean/median Sharpe and consistency.
+
+**Benefit**: More robust performance estimate; reduces luck from a single favorable test window.
+
+### 13.2 Action Constraints (Concentration Limits)
+
+**Problem**: Agent can allocate 100% to one asset and blow up.
+
+**Plan**: Cap max weight per asset in env normalization:
+
+```
+w = clip(w, 0, max_weight_per_asset)  # e.g. 0.35
+w = w / w.sum()
+```
+
+**Benefit**: Limits concentration risk and extreme drawdowns.
+
+### 13.3 Risk-Adjusted Reward (Sharpe-Like)
+
+**Current**: Reward = log return (minus costs).
+
+**Plan**: Use Sharpe-like reward so agent optimizes risk-adjusted return:
+
+```
+reward = mean_return / (std_return + eps)
+```
+
+Or rolling Sharpe over last N steps.
+
+**Benefit**: Encourages stable strategies over high-variance bets.
+
+### 13.4 Regime-Aware Training
+
+**Problem**: Train may be mostly bull (2024), test bear (2025–2026) — regime mismatch.
+
+**Plan**:
+- Sample episodes uniformly over time so bear periods aren’t underrepresented
+- Or oversample bearish periods during training
+- Or add regime labels (bull/bear/sideways) if available
+
+### 13.5 Shorter Episodes
+
+**Current**: 252 steps (~10.5 days of hourly data) per episode.
+
+**Plan**: Try 50–100 steps.
+
+**Benefit**: More episodes per run, faster feedback, potentially better credit assignment.
+
+### 13.6 Implementation Priority
+
+1. **Action constraints** — Quick win, prevents blow-ups
+2. **Walk-forward evaluation** — Better assessment of robustness
+3. **Risk-adjusted reward** — May improve strategy quality
+4. **Shorter episodes** — Easy to test
+5. **Regime-aware training** — More involved, do last
 
 ---
 

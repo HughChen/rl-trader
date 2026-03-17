@@ -1,6 +1,9 @@
 # rl-trader
 
-RL-based cryptocurrency portfolio allocation for offline backtesting. See [PLANNING.md](PLANNING.md) for the full design.
+RL-based cryptocurrency portfolio allocation for offline backtesting.
+
+- [PLANNING.md](PLANNING.md) — Design and roadmap
+- [experiments/](experiments/) — Experimental setup and findings
 
 ## Setup
 
@@ -12,17 +15,25 @@ pip install -r requirements.txt
 
 ## Data Pipeline
 
-Fetch spot OHLCV (Kraken by default; Binance may be geo-restricted), compute technical indicators, and split into train/val/test:
+Fetch spot OHLCV, compute technical indicators, and split into train/val/test:
 
 ```bash
 python scripts/run_data_pipeline.py
 ```
 
+**Exchange restrictions** (important for historical depth):
+
+| Exchange | 1h history | Notes |
+|----------|------------|-------|
+| **KuCoin** (default) | ~2 years | ✅ Use this. Paginates correctly. |
+| **Kraken** | ~1 month | 720-candle API limit; `since` ignored beyond that. |
+| **Binance** | Years | Geo-restricted (451) in US and some regions. |
+
 Options:
 - `--data-dir DATA_DIR` — Output directory (default: `data/`)
 - `--years YEARS` — Years of history (default: 2)
 - `--skip-fetch` — Use existing raw data, recompute indicators and split
-- `--exchange EXCHANGE` — CCXT exchange (kraken, binance, kucoin, bybit, etc.)
+- `--exchange EXCHANGE` — CCXT exchange (kucoin, kraken, binance, bybit)
 
 Output structure:
 ```
@@ -65,7 +76,16 @@ python scripts/run_baseline.py --split test
 python scripts/train_agent.py --split train --total-timesteps 100000 --episode-length 252
 ```
 
+PPO improvements: larger network (256×256), VecNormalize for obs, reward scaling, lower learning rate. Options: `--reward-scale`, `--slippage-sigma`, `--learning-rate`.
+
 **Evaluate** (agent vs baseline):
 ```bash
-python scripts/evaluate.py --split test --model models/ppo_portfolio.zip
+python scripts/evaluate.py --split test --model models/ppo_portfolio.zip --vec-normalize models/vec_normalize.pkl
 ```
+
+**Hyperparameter tuning** (on validation set):
+```bash
+python scripts/tune_hyperparams.py --timesteps-per-trial 40000 --n-trials 6
+```
+
+**Turnover penalty** (discourages churning): `--turnover-penalty 0.05` in `train_agent.py`

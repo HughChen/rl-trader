@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from src.data.split import load_splits
 from src.env import PortfolioEnv
@@ -20,9 +20,13 @@ def main():
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--episode-length", type=int, default=252, help="Steps per episode")
     parser.add_argument("--n-envs", type=int, default=4, help="Parallel envs for vec env")
-    parser.add_argument("--total-timesteps", type=int, default=50_000)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--total-timesteps", type=int, default=200_000)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--reward-scale", type=float, default=10.0)
+    parser.add_argument("--slippage-sigma", type=float, default=0.05)
+    parser.add_argument("--turnover-penalty", type=float, default=0.01)
     parser.add_argument("--out", type=Path, default=Path("models/ppo_portfolio"))
+    parser.add_argument("--save-vec-normalize", type=Path, default=Path("models/vec_normalize.pkl"))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -32,28 +36,41 @@ def main():
         print(f"No data in {args.data_dir}/{args.split}")
         return 1
 
-    env_fn = lambda: PortfolioEnv(
-        data,
-        history_window=50,
-        fee_rate=0.001,
-        slippage_sigma=0.1,
-        episode_length=args.episode_length,
-        seed=None,
-    )
+    def env_fn():
+        return PortfolioEnv(
+            data,
+            history_window=50,
+            fee_rate=0.001,
+            slippage_sigma=args.slippage_sigma,
+            episode_length=args.episode_length,
+            reward_scale=args.reward_scale,
+            turnover_penalty=args.turnover_penalty,
+            seed=None,
+        )
 
     vec_env = DummyVecEnv([env_fn for _ in range(args.n_envs)])
+    vec_env = VecNormalize(
+        vec_env,
+        norm_obs=True,
+        norm_reward=False,  # We use reward_scale in env instead
+        clip_obs=10.0,
+        gamma=0.99,
+    )
 
     model = PPO(
         "MlpPolicy",
         vec_env,
+        policy_kwargs=dict(
+            net_arch=dict(pi=[256, 256], vf=[256, 256]),
+        ),
         learning_rate=args.learning_rate,
-        n_steps=256,
-        batch_size=64,
+        n_steps=1024,
+        batch_size=256,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=0.05,
         verbose=1,
         seed=args.seed,
     )
@@ -61,6 +78,11 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.learn(total_timesteps=args.total_timesteps)
     model.save(str(args.out))
+
+    args.save_vec_normalize.parent.mkdir(parents=True, exist_ok=True)
+    vec_env.save(str(args.save_vec_normalize))
+    print(f"VecNormalize stats saved to {args.save_vec_normalize}")
+
     print(f"Model saved to {args.out}")
     return 0
 

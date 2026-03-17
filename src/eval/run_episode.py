@@ -23,7 +23,8 @@ def run_episode(env, get_action, seed: int | None = None) -> tuple[np.ndarray, f
     while not done:
         action = get_action(obs, info)
         obs, reward, done, truncated, info = env.step(action)
-        rewards.append(reward)
+        # Use raw_reward for metrics when available (unscaled log return)
+        rewards.append(info.get("raw_reward", reward))
         done = done or truncated
 
     rewards = np.array(rewards)

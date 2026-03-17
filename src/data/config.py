@@ -1,7 +1,7 @@
 """Data pipeline configuration."""
 
-# Exchange: binance, kraken, kucoin, bybit, etc. (Binance may be geo-restricted)
-EXCHANGE_ID = "kraken"
+# Exchange: kucoin (2yr history), kraken (1mo limit), binance (geo-restricted in some regions)
+EXCHANGE_ID = "kucoin"
 
 # Top liquid spot pairs (quote: USDT on most exchanges; Kraken uses USD)
 # Kraken uses USD pairs; most others use USDT
@@ -11,7 +11,7 @@ SYMBOLS_BY_EXCHANGE = {
     "kucoin": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT"],
     "bybit": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT"],
 }
-SYMBOLS = SYMBOLS_BY_EXCHANGE.get(EXCHANGE_ID, SYMBOLS_BY_EXCHANGE["kraken"])
+SYMBOLS = SYMBOLS_BY_EXCHANGE.get(EXCHANGE_ID, SYMBOLS_BY_EXCHANGE["kucoin"])
 
 # Bar frequency: 1h for flexibility (can resample to 30m if needed)
 TIMEFRAME = "1h"

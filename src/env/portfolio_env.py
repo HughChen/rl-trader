@@ -42,6 +42,8 @@ class PortfolioEnv(gym.Env):
         episode_length: int | None = None,
         warmup: int = 26,
         seed: int | None = None,
+        reward_scale: float = 100.0,
+        turnover_penalty: float = 0.0,
     ):
         """
         Args:
@@ -52,6 +54,8 @@ class PortfolioEnv(gym.Env):
             episode_length: if set, random sub-episodes; if None, full dataset
             warmup: rows to drop for indicator warmup
             seed: random seed
+            reward_scale: scale factor for reward (stronger learning signal)
+            turnover_penalty: extra penalty per unit turnover (discourages churning)
         """
         super().__init__()
         self._aligned = align_data(data, warmup=warmup)
@@ -83,6 +87,8 @@ class PortfolioEnv(gym.Env):
             dtype=np.float32,
         )
 
+        self.reward_scale = reward_scale
+        self.turnover_penalty = turnover_penalty
         self._rng = np.random.default_rng(seed)
         self._t: int = 0
         self._start_t: int = 0
@@ -181,7 +187,9 @@ class PortfolioEnv(gym.Env):
         cost_factor = 1.0 - fee - slippage
         p_after = p_before * cost_factor
 
-        reward = np.log(p_after / p_prev)
+        raw_reward = np.log(p_after / p_prev)
+        turnover = np.sum(np.abs(w_target - self._w))
+        reward = (raw_reward - self.turnover_penalty * turnover) * self.reward_scale
         self._portfolio_value = p_after
         self._w = w_target
         self._t = t + 1
@@ -191,6 +199,7 @@ class PortfolioEnv(gym.Env):
             "portfolio_value": self._portfolio_value,
             "fee": fee,
             "slippage": slippage,
+            "raw_reward": raw_reward,
         }
 
         # Done when we've reached episode end
