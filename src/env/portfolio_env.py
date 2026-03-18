@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 
 import gymnasium as gym
+from gymnasium import spaces
 import pandas as pd
 import numpy as np
 
@@ -54,6 +55,8 @@ class PortfolioEnv(gym.Env):
         max_weight_per_asset: float | None = 0.35,
         reward_type: str = "log_return",
         sharpe_window: int = 20,
+        observation_type: str = "returns",
+        diversification_lambda: float = 0.0,
     ):
         """
         Args:
@@ -70,8 +73,11 @@ class PortfolioEnv(gym.Env):
             max_weight_per_asset: cap per-asset weight (e.g. 0.35); None = no cap
             reward_type: "log_return" or "sharpe" (rolling Sharpe-like reward)
             sharpe_window: window size for rolling Sharpe when reward_type="sharpe"
+            observation_type: "returns" (flat) or "pgportfolio" (Dict: price matrix + prev_w)
+            diversification_lambda: PGPortfolio-style penalty for concentrated portfolios (default 0)
         """
         super().__init__()
+        self.observation_type = observation_type
         self._aligned = align_data(data, warmup=warmup)
         self.history_window = history_window
         self.fee_rate = fee_rate
@@ -83,18 +89,34 @@ class PortfolioEnv(gym.Env):
         n_assets = self._aligned.n_assets
         n_indicators = self._aligned.n_indicators
 
-        # obs = price_returns (H * n) + indicators (n * ind) + prev_weights (n)
-        obs_dim = (
-            history_window * n_assets
-            + n_assets * n_indicators
-            + n_assets
-        )
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(obs_dim,),
-            dtype=np.float32,
-        )
+        if observation_type == "pgportfolio":
+            # Dict: price (3, n_assets, H) close/high/low + prev_w (n_assets)
+            self.observation_space = spaces.Dict({
+                "price": spaces.Box(
+                    low=0.0,
+                    high=2.0,
+                    shape=(3, n_assets, history_window),
+                    dtype=np.float32,
+                ),
+                "prev_w": spaces.Box(
+                    low=0.0,
+                    high=1.0,
+                    shape=(n_assets,),
+                    dtype=np.float32,
+                ),
+            })
+        else:
+            obs_dim = (
+                history_window * n_assets
+                + n_assets * n_indicators
+                + n_assets
+            )
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(obs_dim,),
+                dtype=np.float32,
+            )
         self.action_space = gym.spaces.Box(
             low=0.0,
             high=1.0,
@@ -107,6 +129,7 @@ class PortfolioEnv(gym.Env):
         self.max_weight_per_asset = max_weight_per_asset
         self.reward_type = reward_type
         self.sharpe_window = sharpe_window
+        self.diversification_lambda = diversification_lambda
         self._rng = np.random.default_rng(seed)
         self._reward_buffer: deque[float] = deque(maxlen=sharpe_window)
         self._t: int = 0
@@ -115,25 +138,41 @@ class PortfolioEnv(gym.Env):
         self._portfolio_value: float = 1.0
 
     def _build_obs(self, t: int) -> np.ndarray:
-        """Build observation vector for step t."""
+        """Build observation for step t."""
         H = self.history_window
         n = self._aligned.n_assets
-        n_ind = self._aligned.n_indicators
 
-        # Price returns: last H steps, shape (H, n) -> flatten
+        if self.observation_type == "pgportfolio":
+            # PGPortfolio: 3-channel (close, high, low) normalized by close_t
+            start = max(0, t - H + 1)
+            close = self._aligned.prices[start : t + 1]  # (H, n)
+            high = self._aligned.prices_high[start : t + 1]
+            low = self._aligned.prices_low[start : t + 1]
+            if len(close) < H:
+                pad_c = np.tile(close[0:1], (H - len(close), 1))
+                pad_h = np.tile(high[0:1], (H - len(high), 1))
+                pad_l = np.tile(low[0:1], (H - len(low), 1))
+                close = np.concatenate([pad_c, close], axis=0)
+                high = np.concatenate([pad_h, high], axis=0)
+                low = np.concatenate([pad_l, low], axis=0)
+            close_t = close[-1]
+            close_t = np.where(close_t > 1e-12, close_t, 1.0)
+            norm_close = (close / close_t).T.astype(np.float32)  # (n, H)
+            norm_high = (high / close_t).T.astype(np.float32)
+            norm_low = (low / close_t).T.astype(np.float32)
+            price_obs = np.stack([norm_close, norm_high, norm_low], axis=0)  # (3, n, H)
+            return {"price": price_obs, "prev_w": self._w.astype(np.float32)}
+
+        # Default: returns + indicators + prev_weights
+        n_ind = self._aligned.n_indicators
         start = max(0, t - H)
         returns = self._aligned.returns[start:t]
         if len(returns) < H:
             pad = np.zeros((H - len(returns), n), dtype=np.float32)
             returns = np.concatenate([pad, returns], axis=0)
         price_part = returns.flatten()
-
-        # Indicators at t: (n, n_ind) -> flatten
         ind_part = self._aligned.get_indicators(t).flatten()
-
-        # Previous weights
         w_part = self._w.astype(np.float32)
-
         return np.concatenate([price_part, ind_part, w_part]).astype(np.float32)
 
     def reset(
@@ -214,6 +253,13 @@ class PortfolioEnv(gym.Env):
         raw_reward = np.log(p_after / p_prev)
         turnover = np.sum(np.abs(w_target - self._w))
 
+        div_penalty = 0.0
+        if self.diversification_lambda > 0:
+            # PGPortfolio: -log(1+1e-6 - w) penalizes concentration
+            div_penalty = self.diversification_lambda * np.sum(
+                -np.log(1e-6 + 1.0 - np.clip(w_target, 0, 1 - 1e-6))
+            )
+
         if self.reward_type == "sharpe":
             self._reward_buffer.append(raw_reward)
             if len(self._reward_buffer) >= 2:
@@ -223,9 +269,9 @@ class PortfolioEnv(gym.Env):
                 sharpe_like = mean_r / std_r
             else:
                 sharpe_like = raw_reward
-            reward = (sharpe_like - self.turnover_penalty * turnover) * self.reward_scale
+            reward = (sharpe_like - self.turnover_penalty * turnover - div_penalty) * self.reward_scale
         else:
-            reward = (raw_reward - self.turnover_penalty * turnover) * self.reward_scale
+            reward = (raw_reward - self.turnover_penalty * turnover - div_penalty) * self.reward_scale
         self._portfolio_value = p_after
         self._w = w_target
         self._t = t + 1

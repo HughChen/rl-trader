@@ -25,6 +25,8 @@ class AlignedMarketData:
 
     Attributes:
         prices: (T, n_assets) close prices
+        prices_high: (T, n_assets) high prices (for PGPortfolio 3-channel)
+        prices_low: (T, n_assets) low prices (for PGPortfolio 3-channel)
         volumes: (T, n_assets) volume in quote currency
         returns: (T, n_assets) simple return = (close_t / close_{t-1}) - 1
         indicators: (T, n_assets, n_indicators) normalized indicator values
@@ -33,6 +35,8 @@ class AlignedMarketData:
     """
 
     prices: np.ndarray  # (T, n_assets)
+    prices_high: np.ndarray  # (T, n_assets)
+    prices_low: np.ndarray  # (T, n_assets)
     volumes: np.ndarray  # (T, n_assets)
     returns: np.ndarray  # (T, n_assets)
     indicators: np.ndarray  # (T, n_assets, n_indicators)
@@ -114,11 +118,15 @@ def align_data(
     n_assets = len(symbols)
 
     prices = np.zeros((n_steps, n_assets), dtype=np.float64)
+    prices_high = np.zeros((n_steps, n_assets), dtype=np.float64)
+    prices_low = np.zeros((n_steps, n_assets), dtype=np.float64)
     volumes = np.zeros((n_steps, n_assets), dtype=np.float64)
 
     for i, sym in enumerate(symbols):
         df = data[sym].loc[common_idx]
         prices[:, i] = df["close"].values
+        prices_high[:, i] = df["high"].values if "high" in df.columns else df["close"].values
+        prices_low[:, i] = df["low"].values if "low" in df.columns else df["close"].values
         volumes[:, i] = df["volume"].values
 
     # Returns: r_t = (close_t / close_{t-1}) - 1
@@ -128,6 +136,8 @@ def align_data(
 
     # Drop warmup
     prices = prices[warmup:]
+    prices_high = prices_high[warmup:]
+    prices_low = prices_low[warmup:]
     volumes = volumes[warmup:]
     returns = returns[warmup:]
     timestamps = common_idx[warmup:].values
@@ -161,6 +171,8 @@ def align_data(
 
     return AlignedMarketData(
         prices=prices,
+        prices_high=prices_high,
+        prices_low=prices_low,
         volumes=volumes,
         returns=returns,
         indicators=indicators,

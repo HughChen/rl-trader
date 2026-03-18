@@ -14,6 +14,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from src.data.split import load_splits
 from src.env import PortfolioEnv
+from src.policy import PortfolioDictExtractor
 from src.env.vec_env_wrapper import VecEnvToGymWrapper
 from src.eval.cost_analysis import replay_from_data
 from src.eval.metrics import compute_metrics
@@ -32,6 +33,7 @@ def main():
     parser.add_argument("--notional", type=float, default=1e6, help="Portfolio size (USD) for slippage")
     parser.add_argument("--max-weight", type=float, default=0.35)
     parser.add_argument("--cost-analysis", action="store_true", help="Break down fee vs slippage impact")
+    parser.add_argument("--policy", choices=["mlp", "cnn"], default="mlp", help="Must match trained model")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -40,6 +42,8 @@ def main():
     if not data:
         print(f"No data in {args.data_dir}/{args.split}")
         return 1
+
+    obs_type = "pgportfolio" if args.policy == "cnn" else "returns"
 
     def make_env():
         return PortfolioEnv(
@@ -50,6 +54,7 @@ def main():
             notional_usd=args.notional,
             episode_length=args.episode_length,
             max_weight_per_asset=args.max_weight,
+            observation_type=obs_type,
             seed=args.seed,
         )
 
@@ -66,7 +71,14 @@ def main():
     # Agent (if model exists)
     if args.model.exists():
         print("\n--- PPO agent ---")
-        model = PPO.load(str(args.model))
+        custom_objects = {}
+        if args.policy == "cnn":
+            custom_objects["policy_kwargs"] = dict(
+                net_arch=dict(pi=[256, 256], vf=[256, 256]),
+                features_extractor_class=PortfolioDictExtractor,
+                features_extractor_kwargs=dict(features_dim=128),
+            )
+        model = PPO.load(str(args.model), custom_objects=custom_objects or None)
 
         if args.vec_normalize and str(args.vec_normalize) and args.vec_normalize.exists():
             eval_vec_env = DummyVecEnv([make_env])
@@ -107,6 +119,7 @@ def main():
                     notional_usd=args.notional,
                     episode_length=None,  # Full period for cost analysis
                     max_weight_per_asset=args.max_weight,
+                    observation_type=obs_type,
                     seed=args.seed,
                 )
             if args.vec_normalize and str(args.vec_normalize) and args.vec_normalize.exists():

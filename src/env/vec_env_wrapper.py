@@ -23,7 +23,12 @@ class VecEnvToGymWrapper:
         else:
             obs, info = result, {}
         info_dict = {k: v[0] if hasattr(v, "__len__") and len(v) == 1 else v for k, v in info.items()} if info else {}
-        return obs[0], info_dict
+        # VecEnv returns batched obs; extract first env
+        if isinstance(obs, dict):
+            obs_out = {k: (v[0] if hasattr(v, "__len__") and len(v) > 0 else v) for k, v in obs.items()}
+        else:
+            obs_out = obs[0]
+        return obs_out, info_dict
 
     def step(self, action):
         result = self.vec_env.step([action])
@@ -34,7 +39,11 @@ class VecEnvToGymWrapper:
             obs, rewards, dones, infos = result
             truncated = False
         info = infos[0] if isinstance(infos, list) and infos else {}
-        return obs[0], float(rewards[0]), bool(dones[0]), truncated, info
+        if isinstance(obs, dict):
+            obs_out = {k: (v[0] if hasattr(v, "__len__") and len(v) > 0 else v) for k, v in obs.items()}
+        else:
+            obs_out = obs[0]
+        return obs_out, float(rewards[0]), bool(dones[0]), truncated, info
 
     @property
     def n_assets(self):

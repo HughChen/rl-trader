@@ -13,6 +13,7 @@ Each experiment has a separate report with **setup** and **findings**.
 | [exp_007_cost_attribution](exp_007_cost_attribution.md) | Fee vs slippage impact on agent performance |
 | [exp_008_slippage_notional](exp_008_slippage_notional.md) | Slippage notional fix (trade size vs volume) |
 | [exp_009_turnover_notional_sweep](exp_009_turnover_notional_sweep.md) | Turnover penalty & notional sweep |
+| [exp_010_full_episodes](exp_010_full_episodes.md) | Full-episode training (short-horizon hypothesis) |
 
 ---
 

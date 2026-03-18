@@ -83,6 +83,12 @@ PPO improvements: larger network (256×256), VecNormalize for obs, reward scalin
 python scripts/evaluate.py --split test --model models/ppo_portfolio.zip --vec-normalize models/vec_normalize.pkl
 ```
 
+**Train and evaluate pipeline** (single command):
+```bash
+python scripts/train_and_evaluate.py --total-timesteps 200000 --policy cnn
+```
+Runs training on train split, then evaluates on val and test. Use `--skip-train` to eval only, `--skip-eval` to train only, `--eval-splits val` for a single split, `--cost-analysis` for fee/slippage breakdown on test.
+
 **Hyperparameter tuning** (on validation set):
 ```bash
 python scripts/tune_hyperparams.py --timesteps-per-trial 40000 --n-trials 6
