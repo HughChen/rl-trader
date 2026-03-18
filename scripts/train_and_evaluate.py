@@ -19,6 +19,15 @@ def main():
     parser.add_argument("--turnover-penalty", type=float, default=0.05)
     parser.add_argument("--notional", type=float, default=100_000)
     parser.add_argument("--slippage-sigma", type=float, default=0.05)
+    parser.add_argument("--cost-model", choices=["full", "simple"], default="full")
+    parser.add_argument("--sample-bias", type=float, default=0.3)
+    parser.add_argument("--lr-decay", action="store_true")
+    parser.add_argument("--min-rebalance-interval", type=int, default=12)
+    parser.add_argument("--max-turnover", type=float, default=0.1)
+    parser.add_argument("--terminal-reward-scale", type=float, default=1.0)
+    parser.add_argument("--no-high-impact", action="store_true")
+    parser.add_argument("--curriculum", action="store_true")
+    parser.add_argument("--regime-bias", type=float, default=1.0)
     parser.add_argument("--max-weight", type=float, default=0.35)
     parser.add_argument("--out", type=Path, default=Path("models/ppo_portfolio"))
     parser.add_argument("--save-vec-normalize", type=Path, default=Path("models/vec_normalize.pkl"))
@@ -51,10 +60,22 @@ def main():
             "--notional", str(args.notional),
             "--slippage-sigma", str(args.slippage_sigma),
             "--max-weight", str(args.max_weight),
+            "--cost-model", args.cost_model,
+            "--sample-bias", str(args.sample_bias),
+            "--min-rebalance-interval", str(args.min_rebalance_interval),
+            "--max-turnover", str(args.max_turnover),
+            "--terminal-reward-scale", str(args.terminal_reward_scale),
+            "--regime-bias", str(args.regime_bias),
             "--out", str(args.out),
             "--save-vec-normalize", str(args.save_vec_normalize),
             "--seed", str(args.seed),
         ]
+        if args.lr_decay:
+            cmd.append("--lr-decay")
+        if args.no_high_impact:
+            cmd.append("--no-high-impact")
+        if args.curriculum:
+            cmd.append("--curriculum")
         result = subprocess.run(cmd, cwd=str(root))
         if result.returncode != 0:
             print(f"Training failed with exit code {result.returncode}")
@@ -78,6 +99,7 @@ def main():
                 "--model", str(model_path),
                 "--vec-normalize", str(args.save_vec_normalize),
                 "--policy", args.policy,
+                "--cost-model", args.cost_model,
                 "--notional", str(args.notional),
                 "--slippage-sigma", str(args.slippage_sigma),
                 "--max-weight", str(args.max_weight),

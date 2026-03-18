@@ -57,6 +57,13 @@ class PortfolioEnv(gym.Env):
         sharpe_window: int = 20,
         observation_type: str = "returns",
         diversification_lambda: float = 0.0,
+        cost_model: str = "full",
+        sample_bias: float = 0.0,
+        min_rebalance_interval: int = 0,
+        max_turnover_per_step: float | None = None,
+        terminal_reward_scale: float = 0.0,
+        regime_bias: float = 0.0,
+        regime_lookback: int = 24,
     ):
         """
         Args:
@@ -75,6 +82,13 @@ class PortfolioEnv(gym.Env):
             sharpe_window: window size for rolling Sharpe when reward_type="sharpe"
             observation_type: "returns" (flat) or "pgportfolio" (Dict: price matrix + prev_w)
             diversification_lambda: PGPortfolio-style penalty for concentrated portfolios (default 0)
+            cost_model: "full" (fee + slippage) or "simple" (fee only, PGPortfolio-style)
+            sample_bias: bias episode starts toward recent data (0=uniform, >0=recent). PGPortfolio uses ~5e-5
+            min_rebalance_interval: minimum steps between rebalances (0=no constraint). Reduces churning.
+            max_turnover_per_step: cap turnover per step (None=no cap). Limits trade size.
+            terminal_reward_scale: add terminal Sharpe-like reward at episode end (0=disabled). Long-horizon signal.
+            regime_bias: when > 0, oversample episode starts in bear periods (recent return < 0). Extra weight for bear.
+            regime_lookback: steps for recent return when computing regime (default 24 = 1 day hourly).
         """
         super().__init__()
         self.observation_type = observation_type
@@ -130,7 +144,16 @@ class PortfolioEnv(gym.Env):
         self.reward_type = reward_type
         self.sharpe_window = sharpe_window
         self.diversification_lambda = diversification_lambda
+        self.cost_model = cost_model
+        self.sample_bias = sample_bias
+        self.min_rebalance_interval = min_rebalance_interval
+        self.max_turnover_per_step = max_turnover_per_step
+        self.terminal_reward_scale = terminal_reward_scale
+        self.regime_bias = regime_bias
+        self.regime_lookback = regime_lookback
+        self._effective_slippage = 0.0 if cost_model == "simple" else slippage_sigma
         self._rng = np.random.default_rng(seed)
+        self._last_rebalance_t: int = -1
         self._reward_buffer: deque[float] = deque(maxlen=sharpe_window)
         self._t: int = 0
         self._start_t: int = 0
@@ -194,7 +217,26 @@ class PortfolioEnv(gym.Env):
         else:
             max_start = T - self.episode_length - H - 1
             max_start = max(max_start, H)
-            self._start_t = int(self._rng.integers(H, max_start + 1))
+            if self.regime_bias > 0:
+                # Oversample bear periods: weight = 1 + regime_bias when recent return < 0
+                weights = np.ones(max_start - H + 1)
+                for i, t in enumerate(range(H, max_start + 1)):
+                    start = max(0, t - self.regime_lookback)
+                    # Equal-weight portfolio return over lookback
+                    rets = self._aligned.returns[start:t]
+                    if len(rets) > 0:
+                        ew_ret = np.mean(rets)  # avg across assets and time
+                        if ew_ret < 0:
+                            weights[i] = 1.0 + self.regime_bias
+                weights = weights / np.sum(weights)
+                self._start_t = int(H + self._rng.choice(len(weights), p=weights))
+            elif self.sample_bias > 0 and self.sample_bias < 1:
+                # Bias toward recent data (PGPortfolio-style). u^b with b<1 gives more mass at 1.
+                u = self._rng.random()
+                self._start_t = int(H + (max_start - H) * (1 - u ** self.sample_bias))
+                self._start_t = max(H, min(self._start_t, max_start))
+            else:
+                self._start_t = int(self._rng.integers(H, max_start + 1))
             self._t = self._start_t
             max_len = self.episode_length
 
@@ -203,6 +245,7 @@ class PortfolioEnv(gym.Env):
         self._w = np.ones(n) / n
         self._portfolio_value = 1.0
         self._reward_buffer.clear()
+        self._last_rebalance_t = self._start_t - 1  # Allow rebalance on first step
 
         obs = self._build_obs(self._t)
         info = {
@@ -214,12 +257,8 @@ class PortfolioEnv(gym.Env):
 
     def step(
         self,
-        action: np.ndarray,
+        action: np.ndarray | None,
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
-        w_target = _normalize_weights(
-            np.asarray(action, dtype=np.float64),
-            max_weight_per_asset=self.max_weight_per_asset,
-        )
         t = self._t
         T = self._aligned.n_steps
 
@@ -236,22 +275,52 @@ class PortfolioEnv(gym.Env):
         returns = (prices_now / prices_prev) - 1
         p_before = p_prev * (1 + np.dot(self._w, returns))
 
-        # Transaction costs
-        fee = fee_cost(self._w, w_target, self.fee_rate)
-        slippage = slippage_cost(
-            self._w,
-            w_target,
-            p_before,
-            prices_now,
-            volumes_now,
-            self.slippage_sigma,
-            notional_usd=self.notional_usd,
-        )
+        # Drifted weights: actual portfolio weights after price move, before rebalancing
+        port_return = 1.0 + np.dot(self._w, returns)
+        w_drifted = self._w * (1.0 + returns) / np.maximum(port_return, 1e-12)
+
+        # Hold action: None means no rebalance (buy-and-hold)
+        if action is None:
+            w_target = w_drifted
+        else:
+            w_target = _normalize_weights(
+                np.asarray(action, dtype=np.float64),
+                max_weight_per_asset=self.max_weight_per_asset,
+            )
+
+        # Min rebalance interval: force hold if too soon since last rebalance
+        if self.min_rebalance_interval > 0 and (t - self._last_rebalance_t) < self.min_rebalance_interval:
+            w_target = w_drifted
+
+        # Max turnover per step: cap trade size
+        turnover_raw = np.sum(np.abs(w_target - w_drifted))
+        if self.max_turnover_per_step is not None and turnover_raw > self.max_turnover_per_step and turnover_raw > 1e-12:
+            delta = w_target - w_drifted
+            scale = self.max_turnover_per_step / turnover_raw
+            w_target = _normalize_weights(w_drifted + delta * scale, max_weight_per_asset=self.max_weight_per_asset)
+
+        # Transaction costs use drifted weights (realistic: cost to rebalance from current position)
+        fee = fee_cost(w_drifted, w_target, self.fee_rate)
+        if self._effective_slippage > 0:
+            slippage = slippage_cost(
+                w_drifted,
+                w_target,
+                p_before,
+                prices_now,
+                volumes_now,
+                self._effective_slippage,
+                notional_usd=self.notional_usd,
+            )
+        else:
+            slippage = 0.0
         cost_factor = 1.0 - fee - slippage
         p_after = p_before * cost_factor
 
         raw_reward = np.log(p_after / p_prev)
-        turnover = np.sum(np.abs(w_target - self._w))
+        turnover = np.sum(np.abs(w_target - w_drifted))
+
+        if turnover > 1e-12:
+            self._last_rebalance_t = t
 
         div_penalty = 0.0
         if self.diversification_lambda > 0:
@@ -260,8 +329,9 @@ class PortfolioEnv(gym.Env):
                 -np.log(1e-6 + 1.0 - np.clip(w_target, 0, 1 - 1e-6))
             )
 
-        if self.reward_type == "sharpe":
+        if self.reward_type == "sharpe" or self.terminal_reward_scale > 0:
             self._reward_buffer.append(raw_reward)
+        if self.reward_type == "sharpe":
             if len(self._reward_buffer) >= 2:
                 arr = np.array(self._reward_buffer)
                 mean_r = np.mean(arr)
@@ -289,6 +359,13 @@ class PortfolioEnv(gym.Env):
             done = self._t >= T - 1
         else:
             done = (self._t - self._start_t) >= self.episode_length or self._t >= T - 1
+
+        if done and self.terminal_reward_scale > 0 and len(self._reward_buffer) >= 2:
+            arr = np.array(self._reward_buffer)
+            mean_r = np.mean(arr)
+            std_r = np.std(arr) + 1e-8
+            sharpe_like = mean_r / std_r
+            reward += self.terminal_reward_scale * sharpe_like
 
         truncated = False
         return obs, float(reward), done, truncated, info

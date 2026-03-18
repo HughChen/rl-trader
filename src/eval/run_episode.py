@@ -46,13 +46,28 @@ def run_episode(
     return result
 
 
+def _prev_weights_from_obs(obs, n_assets: int) -> np.ndarray:
+    """Extract previous weights from observation (Dict or flat)."""
+    if isinstance(obs, dict):
+        return np.asarray(obs["prev_w"], dtype=np.float32)
+    return np.asarray(obs[-n_assets:], dtype=np.float32)
+
+
 def run_equal_weight(env, seed: int | None = None) -> tuple[np.ndarray, float, dict]:
-    """Run equal-weight buy-and-hold baseline."""
+    """Run equal-weight rebalancing baseline (rebalances to 1/n every step, has friction)."""
     n_assets = env.n_assets
     action = np.full(n_assets, 1.0 / n_assets, dtype=np.float32)
 
     def get_action(obs, info):
         return action
+
+    return run_episode(env, get_action, seed)
+
+
+def run_equal_weight_buy_and_hold(env, seed: int | None = None) -> tuple[np.ndarray, float, dict]:
+    """Run equal-weight buy-and-hold baseline (no rebalancing, zero friction)."""
+    def get_action(obs, info):
+        return None  # Hold: env uses drifted weights as target (zero turnover)
 
     return run_episode(env, get_action, seed)
 

@@ -18,7 +18,7 @@ from src.policy import PortfolioDictExtractor
 from src.env.vec_env_wrapper import VecEnvToGymWrapper
 from src.eval.cost_analysis import replay_from_data
 from src.eval.metrics import compute_metrics
-from src.eval.run_episode import run_equal_weight, run_episode
+from src.eval.run_episode import run_equal_weight, run_equal_weight_buy_and_hold, run_episode
 
 
 def main():
@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--notional", type=float, default=1e6, help="Portfolio size (USD) for slippage")
     parser.add_argument("--max-weight", type=float, default=0.35)
     parser.add_argument("--cost-analysis", action="store_true", help="Break down fee vs slippage impact")
+    parser.add_argument("--cost-model", choices=["full", "simple"], default="full", help="full=fee+slippage, simple=fee only (PGPortfolio, match training)")
     parser.add_argument("--policy", choices=["mlp", "cnn"], default="mlp", help="Must match trained model")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -44,29 +45,37 @@ def main():
         return 1
 
     obs_type = "pgportfolio" if args.policy == "cnn" else "returns"
+    fee_rate = 0.0025 if args.cost_model == "simple" else 0.001
 
     def make_env():
         return PortfolioEnv(
             data,
             history_window=50,
-            fee_rate=0.001,
+            fee_rate=fee_rate,
             slippage_sigma=args.slippage_sigma,
             notional_usd=args.notional,
             episode_length=args.episode_length,
             max_weight_per_asset=args.max_weight,
             observation_type=obs_type,
+            cost_model=args.cost_model,
             seed=args.seed,
         )
 
     env = make_env()
     periods_per_year = 252 * 24  # 1h bars
 
-    # Baseline
-    print("\n--- Equal-weight baseline ---")
-    rewards_baseline, _, _ = run_equal_weight(env, seed=args.seed)
-    metrics_baseline = compute_metrics(rewards_baseline, periods_per_year=periods_per_year)
-    print(f"  Sharpe: {metrics_baseline['sharpe']:.4f}  Sortino: {metrics_baseline['sortino']:.4f}")
-    print(f"  Max DD: {metrics_baseline['max_drawdown']:.2%}  Total ret: {metrics_baseline['total_return']:.2%}")
+    # Baselines
+    print("\n--- Equal-weight rebalancing (with friction) ---")
+    rewards_rebal, _, _ = run_equal_weight(env, seed=args.seed)
+    metrics_rebal = compute_metrics(rewards_rebal, periods_per_year=periods_per_year)
+    print(f"  Sharpe: {metrics_rebal['sharpe']:.4f}  Sortino: {metrics_rebal['sortino']:.4f}")
+    print(f"  Max DD: {metrics_rebal['max_drawdown']:.2%}  Total ret: {metrics_rebal['total_return']:.2%}")
+
+    print("\n--- Equal-weight buy-and-hold (no friction) ---")
+    rewards_bh, _, _ = run_equal_weight_buy_and_hold(env, seed=args.seed)
+    metrics_bh = compute_metrics(rewards_bh, periods_per_year=periods_per_year)
+    print(f"  Sharpe: {metrics_bh['sharpe']:.4f}  Sortino: {metrics_bh['sortino']:.4f}")
+    print(f"  Max DD: {metrics_bh['max_drawdown']:.2%}  Total ret: {metrics_bh['total_return']:.2%}")
 
     # Agent (if model exists)
     if args.model.exists():
@@ -104,8 +113,10 @@ def main():
         print(f"  Max DD: {metrics_agent['max_drawdown']:.2%}  Total ret: {metrics_agent['total_return']:.2%}")
 
         print("\n--- Comparison ---")
-        sharpe_diff = metrics_agent["sharpe"] - metrics_baseline["sharpe"]
-        print(f"  Sharpe diff (agent - baseline): {sharpe_diff:+.4f}")
+        sharpe_diff_rebal = metrics_agent["sharpe"] - metrics_rebal["sharpe"]
+        sharpe_diff_bh = metrics_agent["sharpe"] - metrics_bh["sharpe"]
+        print(f"  Sharpe diff vs rebalancing: {sharpe_diff_rebal:+.4f}")
+        print(f"  Sharpe diff vs buy-and-hold: {sharpe_diff_bh:+.4f}")
 
         # Cost attribution: replay with different fee/slippage to isolate impact
         if args.cost_analysis:
